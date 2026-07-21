@@ -1,0 +1,120 @@
+const CPS_LISTING = 'https://cellphones.com.vn/laptop.html';
+
+const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+const parseVNPrice = (s) => {
+  const n = parseFloat((s || '').replace(/[^\d]/g, ''));
+  return Number.isFinite(n) ? String(Math.round(n)) : '';
+};
+
+function guessBrand(name, body) {
+  const known = ['MSI','ASUS','ACER','LENOVO','HP','DELL','APPLE','MACBOOK','SAMSUNG','GIGABYTE','RAZER','LG','MICROSOFT','HONOR','REALME','XIAOMI','REDMI'];
+  const hay = ((name || '') + ' ' + (body || '')).toUpperCase();
+  for (const b of known) { if (hay.includes(b)) return b; }
+  const m = (name || '').match(/^([A-Za-z][A-Za-z0-9\-]+)/);
+  return m ? m[1] : '';
+}
+
+export async function scrapeCPS() {
+  const { chromium } = await import('playwright');
+  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] });
+  try {
+    const context = await browser.newContext({ userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', viewport: { width: 1280, height: 900 }, locale: 'vi-VN' });
+    const page = await context.newPage();
+    page.setDefaultTimeout(60000);
+    await page.goto(CPS_LISTING, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await delay(4000);
+
+    for (let i = 0; i < 20; i++) { await page.evaluate(() => window.scrollBy(0, window.innerHeight)); await delay(1500); }
+
+    const cards = await page.evaluate(() => {
+      const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+      const out = [];
+      document.querySelectorAll('.product-info-container.product-item').forEach((card) => {
+        const link = card.querySelector('a.product__link');
+        const titleEl = card.querySelector('.product__name h3');
+        const priceEl = card.querySelector('.product__price--show');
+        const oldPriceEl = card.querySelector('.product__price--through');
+        const discountEl = card.querySelector('.product__price--percent-detail');
+        const timeEl = card.querySelector('.block-smem-time');
+        const name = titleEl ? titleEl.innerText.trim() : '';
+        const href = link ? link.getAttribute('href') : '';
+        if (!name || !href) return;
+        out.push({ name: clean(name), href: href.startsWith('http') ? href : `https://cellphones.com.vn${href}`, price: priceEl ? clean(priceEl.innerText) : '', oldPrice: oldPriceEl ? clean(oldPriceEl.innerText) : '', discount: discountEl ? clean(discountEl.innerText) : '', time: timeEl ? clean(timeEl.innerText) : '' });
+      });
+      return out;
+    });
+
+    console.log('[CPS] Listed cards:', cards.length);
+    const out = [];
+
+    for (let i = 0; i < cards.length; i++) {
+      const { href, name } = cards[i];
+      try {
+        await page.goto(href, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await delay(2000);
+
+        const data = await page.evaluate((nameHint) => {
+          const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+          const txt = (sel) => (document.querySelector(sel)?.innerText || '').trim();
+          const bodyText = clean(document.body.innerText);
+
+          const specSection = Array.from(document.querySelectorAll('section,div')).find((x) => {
+            const t = clean(x.innerText);
+            return t.startsWith('Thông số kỹ thuật') && t.length < 4000;
+          });
+          const specs = {};
+          if (specSection) {
+            const tds = specSection.querySelectorAll('td');
+            tds.forEach((td) => {
+              const label = clean(td.innerText);
+              const next = td.nextElementSibling;
+              const value = next ? clean(next.innerText) : '';
+              if (label && value) specs[label] = value;
+            });
+          }
+          const cpu = specs['Loại CPU'] || specs['CPU'] || '';
+          const gpu = specs['Loại card đồ họa'] || specs['Card đồ họa'] || specs['GPU'] || '';
+          const ram = specs['Dung lượng RAM'] || specs['RAM'] || '';
+          const storage = specs['Ổ cứng'] || specs['SSD'] || '';
+          const screen = specs['Kích thước màn hình'] || specs['Màn hình'] || '';
+          const weight = specs['Khối lượng'] || specs['Trọng lượng'] || '';
+
+          const priceRegex = text => {
+            const m = text.match(/([\d]{1,3}(?:[.,][\d]{3})+)\s*Đ|([\d]{1,3}(?:[.,][\d]{3})+)\s*đ|([\d]{1,3}(?:[.,][\d]{3})+)\s*VND/);
+            return m ? m[0].trim() : '';
+          };
+          const priceText = txt('.product__price--show') || priceRegex(bodyText) || '';
+          const oldPriceText = txt('.product__price--through') || priceRegex(bodyText) || '';
+
+          const result = {
+            name: nameHint,
+            brand: (() => {
+              const m = (nameHint || '').match(/^([A-Za-z][A-Za-z0-9\-]+)/);
+              return m ? m[1] : '';
+            })(),
+            cpu, gpu, ram, storage, screen, weight,
+            origPrice: clean(oldPriceText),
+            salePrice: clean(priceText),
+            discount: '',
+            sold: '',
+            rating: '',
+            link: location.href,
+            scrapedAt: new Date().toISOString()
+          };
+          console.log('[CPS] detail', JSON.stringify({ i: nameHint.slice(0,40), brand: result.brand, cpu: result.cpu.slice(0,30), gpu: result.gpu.slice(0,30), ram: result.ram, salePrice: result.salePrice, origPrice: result.origPrice }));
+          return result;
+        }, name);
+
+        if (data?.name) out.push(data);
+      } catch (e) {
+        console.warn('[CPS] detail failed', i+1, href, e.message);
+      }
+    }
+
+    console.log('[CPS] Total:', out.length);
+    return out;
+  } finally {
+    await browser.close();
+  }
+}

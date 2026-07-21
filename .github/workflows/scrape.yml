@@ -1,0 +1,89 @@
+name: Scrape Laptop Prices
+
+on:
+  schedule:
+    # Runs at 01:00, 04:00, 08:00 UTC every day
+    - cron: '0 1,4,8 * * *'
+  workflow_dispatch:
+    inputs:
+      dealer:
+        description: 'Dealer to scrape (MBW, CPS, FPT, or leave empty for all)'
+        required: false
+        default: ''
+
+jobs:
+  scrape-mbw:
+    name: Scrape MBW
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.dealer == '' || github.event.inputs.dealer == 'MBW' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Scrape MBW
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          LOG_LEVEL: info
+          PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS: '1'
+        run: node src/cli.js --dealer MBW
+
+  scrape-cps:
+    name: Scrape CellPhones
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.dealer == '' || github.event.inputs.dealer == 'CPS' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Scrape CPS
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          LOG_LEVEL: info
+          PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS: '1'
+        run: node src/cli.js --dealer CPS
+
+  scrape-fpt:
+    name: Scrape FPT Shop
+    # FPT nguồn cần self-hosted runner (chặn IP datacenter)
+    runs-on: self-hosted
+    if: ${{ github.event.inputs.dealer == '' || github.event.inputs.dealer == 'FPT' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Scrape FPT
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          LOG_LEVEL: info
+          PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS: '1'
+        run: node src/cli.js --dealer FPT
