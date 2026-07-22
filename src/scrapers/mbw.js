@@ -16,8 +16,15 @@ export async function scrapeMBW() {
   const { chromium } = await import('playwright');
   const browser = await chromium.launch({
     headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+    args: [
+      '--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
+      '--disable-blink-features=AutomationControlled','--disable-web-security',
+      '--disable-features=IsolateOrigins,site-per-process'
+    ]
   });
+  await context.addInitScript(()=>Object.defineProperty(navigator,'webdriver',{get:()=>false}));
+  await page.addInitScript(()=>Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3,4,5]}));
+  await page.addInitScript(()=>Object.defineProperty(navigator,'languages',{get:()=>['vi-VN','en-US']}));
 
   const NAV_TIMEOUT = 180000;
   const LISTING_TIMEOUT = 180000;
@@ -25,10 +32,17 @@ export async function scrapeMBW() {
   try {
     const context = await browser.newContext({
       userAgent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
       viewport: { width: 1280, height: 900 },
-      locale: 'vi-VN'
+      locale: 'vi-VN',
+      extraHTTPHeaders: {
+        'Accept-Language': 'vi-VN,vi;q=0.9,en;q=0.8',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      },
+      ignoreHTTPSErrors: true
     });
+  context.setDefaultTimeout(240000);
+  page.setDefaultTimeout(240000);
     const page = await context.newPage();
     page.setDefaultTimeout(180000);
     await page.goto(TGDD_LISTING, { waitUntil: 'domcontentloaded', timeout: LISTING_TIMEOUT });
