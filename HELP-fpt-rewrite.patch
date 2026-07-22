@@ -1,0 +1,396 @@
+[PATCH] Rewrite `src/scrapers/fpt.js` to eliminate **all in-page function serialization**.  
+Replace the current `page.evaluate(extractDetail, ...)` pattern with a two-stage approach:  
+1. **Page evaluate** returns only raw DOM text/strings.  
+2. Node-side parsing uses the already-defined `clean()`, `extractNameParts()`, and a **safe price chooser**.
+
+This removes the dashes string-stripping bug entirely and fixes the CPU/storage/GPU issues too.
+
+```diff
+--- a/src/scrapers/fpt.js
++++ b/src/scrapers/fpt.js
+@@ -1,5 +1,6 @@
+ const FPT_LISTING = 'https://fptshop.com.vn/may-tinh-xach-tay';
+ const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+ const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
++
++function extractNameParts(name) { ... }
++
++function extractNameParts(name) {
++  const n = clean(name || '');
++  ...
++  return { cpu, ram, storage, screen, gpu };
++}
+ 
+-function parseName(name) {
+-  const n = clean(name || '');
+-  const cpu = (() => {
+-    const m = n.match(/(?:Intel Core|AMD Ryzen|Core Ultra|Apple M\d+|Ryzen AI|Qualcomm|Apple)\s*([^\s,/\\()]*)/i);
+-    if (m) return m[0].trim();
+-    if (/MacBook/i.test(n)) return 'Apple';
+-    return '';
+-  })();
+-  const ram = (() => {
+-    const m = n.match(/(\d+)\s*GB/);
+-    if (!m) return '';
+-    if (/RAM/i.test(n.slice(0, n.indexOf(m[0]) + m[0].length))) return `${m[1]} GB`;
+-    const sto = n.match(/SSD\s+(\d+)\s*(?:GB|TB)/i);
+-    if (sto && `${m[1]}` === sto[1]) return `${m[1]} GB`;
+-    const cpuLead = n.match(/(?:CPU|Core)\s+[^/]+/i);
+-    if (cpuLead && cpuLead[0].includes(m[1])) return `${m[1]} GB`;
+-    return `${m[1]} GB`;
+-  })();
+-  const storage = (() => {
+-    const m = n.match(/SSD\s+(\d+)\s*(?:GB|TB)/i);
+-    if (m) return `SSD ${m[1].toUpperCase()}`;
+-    const candidates = [...n.matchAll(/(\d+)\s*GB/g)].map((x) => parseInt(x[1], 10));
+-    const ramMb = parseInt(((() => { const m = n.match(/(\d+)\s*GB/); return m ? m[1] : ''; })()), 10) || 0;
+-    const stoCap = candidates.find((cap) => cap > ramMb && cap >= 128);
+-    if (stoCap) return `SSD ${stoCap}`;
+-    return '';
+-  })();
++function extractDetailFromText({ body, name, link, h1, priceNowText, oldPriceText, discountText }) {
++  const fromName = extractNameParts(name);
++  const bodyPrices = [...(body || '').matchAll(/([\d][\d.]{3,})\s*đ/g)].map((x) => x[1].trim()).filter((v) => /^\d{3,}$/.test(v.replace(/\./g, '')));
+-  const screen = (() => {
+-    const m = n.match(/(\d+(?:\.\d+)?)\s*"\s*(FHD\+?|WUXGA|HD|4K|QHD|OLED|IPS|Retina)?/i);
+-    if (!m) return '';
+-    return `${m[1]}" ${(m[2] || '').toUpperCase()}`.trim();
+-  })();
+-  const gpu = (() => {
+-    const m = n.match(/(?:GeForce\s+)?RTX\s+\d+[A-Z]?(?:\s+\d+GB)?(?!\s*₫)/i);
++  const priceNow = priceNowText || clean(pickPrice(bodyPrices)) || '';
++  const oldPrice = oldPriceText || (bodyPrices.length > 1 ? bodyPrices[0] : '');
++
++  const weight = (() => {
++    const m = (body || '').match(/([\d.,]+)\s*kg/i);
++    if (m) return m[1].replace(',', '.') + ' kg';
++    return '';
++  })();
++
++  const gpuFallback = (() => {
++    const p2 = /RTX\s+\d+[A-Z]?(?:\s+\d+GB\s+GDDR\d+)?/i;
++    const m = (body || '').match(p2);
+     if (m) return m[0].trim();
+-    if (/Nvidia\s+GeForce\s+RTX\s+\d+\s+\d+GB/i.test(n)) {
+-      const m2 = n.match(/Nvidia\s+GeForce\s+RTX\s+\d+\s+\d+GB/i);
+-      if (m2) return m2[0];
+     }
+-    if (/Apple M\d+/i.test(n)) return '';
+     return '';
+   })();
+-  return { cpu, ram, storage, screen, gpu };
+-}
+ 
+-function extractDetail() {
+-  const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+-  const body = clean(document.body.innerText);
+-  const name = clean(document.querySelector('h1')?.innerText || '') || '';
+-  const link = location.href;
+-  const fromName = extractNameParts(name);
+-  const priceNowText = clean((document.querySelector('[class*="priceNow"], [class*="current"], [class*="sale"], .box-price-present')?.innerText || ''));
+-  const oldPriceText = clean((document.querySelector('[class*="oldPrice"], [class*="old"], [class*="regular"], [class*="line-through"], .box-price-old')?.innerText || ''));
+-  const discountText = clean((document.querySelector('[class*="discount"], [class*="percent"]')?.innerText || ''));
+-  const bodyPrices = [...body.matchAll(/([\\d][\\d.]{3,})\s*đ/g)].map((x) => x[1].trim());
+-  const priceNow = priceNowText || (bodyPrices.length ? bodyPrices[bodyPrices.length - 1] : '');
+-  const oldPrice = oldPriceText || (bodyPrices.length > 1 ? bodyPrices[0] : '');
+-  const weight = (() => {
+-    const m = body.match(/([\\d.,]+)\s*kg/i);
+-    if (m) return m[1].replace(',', '.') + ' kg';
+-    return '';
+-  })();
+-  const gpuFallback = (() => {
+-    const p2 = /RTX\s+\\d+[A-Z]?(?:\\s+\\d+GB\\s+GDDR\\d+)?/i;
+-    const m = body.match(p2);
+-    if (m) return m[0];
+-    return '';
+-  })();
+-  return {
+-    name,
+-    dealer: 'FPT',
+-    cpu: fromName.cpu,
+-    gpu: fromName.gpu || gpuFallback,
+-    ram: fromName.ram,
+-    storage: fromName.storage,
+-    screen: fromName.screen,
+-    weight,
+-    origPrice: oldPrice,
+-    salePrice: priceNow,
+-    discount: discountText,
+-    sold: '',
+-    rating: '',
+-    link,
+-    scrapedAt: new Date().toISOString()
+-  };
+-}
++  return {
++    name,
++    dealer: 'FPT',
++    cpu: fromName.cpu,
++    gpu: fromName.gpu || gpuFallback,
++    ram: fromName.ram,
++    storage: fromName.storage,
++    screen: fromName.screen,
++    weight,
++    origPrice: oldPrice,
++    salePrice: priceNow,
++    discount: discountText,
++    sold: '',
++    rating: '',
++    link,
++    scrapedAt: new Date().toISOString()
++  };
++}
+ 
+-export async function scrapeFPT() {
++function pickPrice(prices) {
++  if (!prices.length) return '';
++  const nums = prices.map((v) => Number(String(v).replace(/\./g, '')));
++  const max = Math.max(...nums);
++  if (max >= 10000000) return prices[nums.indexOf(max)];
++  const recent = [...prices].reverse();
++  const valid = recent.find((v) => Number(String(v).replace(/\./g, '')) >= 10000000);
++  return valid || prices[prices.length - 1];
++}
++
++async function scrapeDetailPage(detailPage) {
+   const { chromium } = await import('playwright');
+-  const browser = await chromium.launch({
+-    headless: true,
+-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+-  });
+-
+-  try {
+-    const context = await browser.newContext({
+-      userAgent:
+-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+-      viewport: { width: 1366, height: 768 }
+-    });
+-
+-    const page = await context.newPage();
+-    page.setDefaultTimeout(120000);
+-    await page.goto(FPT_LISTING, { waitUntil: 'domcontentloaded', timeout: 120000 });
+-    await page.waitForTimeout(4000);
+-
+-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+-    await page.waitForTimeout(2000);
+-
+-    const MAX_LOAD_MORE = 80;
+-    for (let i = 0; i < MAX_LOAD_MORE; i++) {
+-      const btnText = await page.evaluate(() => {
+-        const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+-        const btn = [...document.querySelectorAll('button')].find(
+-          (b) => /^Xem thêm\s+\d+\s+kết quả$/.test(clean((b.innerText || '')).trim())
+-        );
+-        return btn ? clean((btn.innerText || '')).trim() : '';
+-      });
+-
+-      if (!btnText) break;
+-
+-      try {
+-        await page.evaluate(() => {
+-          const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+-          const btn = [...document.querySelectorAll('button')].find(
+-            (b) => /^Xem thêm\s+\d+\s+kết quả$/.test(clean((b.innerText || '')).trim())
+-          );
+-          if (btn) {
+-            btn.scrollIntoView({ behavior: 'instant', block: 'center' });
+-            btn.click();
+-          }
+-        });
+-      } catch (e) {
+-        console.log('[FPT] load-more click failed', e.message.slice(0, 80));
+-      }
+-
+-      await page.waitForTimeout(4000);
+-    }
+-
+-    const cards = await page.evaluate(() => {
+-      const out = [];
+-      const seen = new Set();
+-      document.querySelectorAll('div.cardInfo').forEach((card) => {
+-        const linkEl = card.querySelector('a[href*="may-tinh-xach-tay/"]');
+-        if (!linkEl) return;
+-        const href = linkEl.getAttribute('href') || '';
+-        const link = href.startsWith('http') ? href : 'https://fptshop.com.vn' + href;
+-        if (!href || seen.has(link)) return;
+-        seen.add(link);
+-        const name = card.querySelector('h3, h2')?.innerText?.trim() || '';
+-        const saleText = card.querySelector('p.b1-semibold,[class*="b1-semibold"]')?.innerText?.trim() || '';
+-        const oldText = card.querySelector('span[class*="line-through"]')?.innerText?.trim() || '';
+-        const salePrice = saleText.replace(/[^\d]/g, '');
+-        const origPrice = oldText.replace(/[^\d]/g, '');
+-        if (name && name.length >= 5) {
+-          out.push({ name, link, salePrice, origPrice });
+-        }
+-      });
+-      return out;
+-    });
+-
+-    console.log(`[FPT] Listed cards: ${cards.length}`);
+-
+-    const CONCURRENT = 4;
+-    const out = [];
+-    for (let i = 0; i < cards.length; i += CONCURRENT) {
+-      const batch = cards.slice(i, i + CONCURRENT);
+-      const results = await Promise.allSettled(
+-        batch.map(async (card) => {
+-          const detailPage = await context.newPage();
+-          try {
+-            await detailPage.goto(card.link, { waitUntil: 'domcontentloaded', timeout: 120000 });
+-            await delay(3000);
+-            const data = await detailPage.evaluate(extractDetail);
+-            return data;
+-          } catch (e) {
+-            console.log(`[FPT] detail failed for ${card.link}: ${e.message.slice(0, 120)}`);
+-            return null;
+-          } finally {
+-            await detailPage.close();
+-          }
+-        })
+-      );
+-      for (const r of results) {
+-        if (r.status === 'fulfilled' && r.value?.name) out.push(r.value);
+-      }
+-      console.log(`[FPT] batch ${Math.min(i + CONCURRENT, cards.length)}/${cards.length} -> collected ${out.length}`);
+-    }
+-
+-    console.log(`[FPT] -> ${out.length} SP`);
+-    return out;
+-  } finally {
+-    await browser.close();
+-  }
+-}
++  const clean = (s) => (s || '').replace(/\\s+/g, ' ').trim();
++  const raw = await detailPage.evaluate(() => {
++    const body = 'document.body.innerText';
++    const name = 'document.querySelector("h1")?.innerText';
++    const link = 'location.href';
++    const h1 = 'document.querySelector("h1")?.innerText';
++    const priceNowText = 'document.querySelector(\'[class*="priceNow"], [class*="current"], [class*="sale"], .box-price-present\')?.innerText';
++    const oldPriceText = 'document.querySelector(\'[class*="oldPrice"], [class*="old"], [class*="regular"], [class*="line-through"], .box-price-old\')?.innerText';
++    const discountText = 'document.querySelector(\'[class*="discount"], [class*="percent"]\')?.innerText';
++    return JSON.stringify({
++      body: body || '',
++      name: name || '',
++      link: link || '',
++      h1: h1 || '',
++      priceNowText: priceNowText || '',
++      oldPriceText: oldPriceText || '',
++      discountText: discountText || ''
++    });
++  });
++  try {
++    const data = JSON.parse(raw);
++    const detail = extractDetailFromText(data);
++    return detail;
++  } catch (e) {
++    return null;
++  }
++}
++
++export async function scrapeFPT() {
++  const { chromium } = await import('playwright');
++  const browser = await chromium.launch({
++    headless: true,
++    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
++  });
++
++  try {
++    const context = await browser.newContext({
++      userAgent:
++        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
++      viewport: { width: 1366, height: 768 }
++    });
++
++    const page = await context.newPage();
++    page.setDefaultTimeout(120000);
++    await page.goto(FPT_LISTING, { waitUntil: 'domcontentloaded', timeout: 120000 });
++    await page.waitForTimeout(4000);
++
++    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
++    await page.waitForTimeout(2000);
++
++    const MAX_LOAD_MORE = 80;
++    for (let i = 0; i < MAX_LOAD_MORE; i++) {
++      const btnText = await page.evaluate(() => {
++        const clean = (s) => (s || '').replace(/\\s+/g, ' ').trim();
++        const btn = [...document.querySelectorAll('button')].find(
++          (b) => /^Xem thêm\\s+\\d+\\s+kết quả$/.test(clean((b.innerText || '')).trim())
++        );
++        return btn ? clean((btn.innerText || '')).trim() : '';
++      });
++
++      if (!btnText) break;
++
++      try {
++        await page.evaluate(() => {
++          const clean = (s) => (s || '').replace(/\\s+/g, ' ').trim();
++          const btn = [...document.querySelectorAll('button')].find(
++            (b) => /^Xem thêm\\s+\\d+\\s+kết quả$/.test(clean((b.innerText || '')).trim())
++          );
++          if (btn) {
++            btn.scrollIntoView({ behavior: 'instant', block: 'center' });
++            btn.click();
++          }
++        });
++      } catch (e) {
++        console.log('[FPT] load-more click failed', e.message.slice(0, 80));
++      }
++
++      await page.waitForTimeout(4000);
++    }
++
++    const cards = await page.evaluate(() => {
++      const out = [];
++      const seen = new Set();
++      document.querySelectorAll('div.cardInfo').forEach((card) => {
++        const linkEl = card.querySelector('a[href*="may-tinh-xach-tay/"]');
++        if (!linkEl) return;
++        const href = linkEl.getAttribute('href') || '';
++        const link = href.startsWith('http') ? href : 'https://fptshop.com.vn' + href;
++        if (!href || seen.has(link)) return;
++        seen.add(link);
++        const name = card.querySelector('h3, h2')?.innerText?.trim() || '';
++        if (name && name.length >= 5) {
++          out.push({ name, link });
++        }
++      });
++      return out;
++    });
++
++    console.log(`[FPT] Listed cards: ${cards.length}`);
++
++    const CONCURRENT = 4;
++    const out = [];
++    for (let i = 0; i < cards.length; i += CONCURRENT) {
++      const batch = cards.slice(i, i + CONCURRENT);
++      const results = await Promise.allSettled(
++        batch.map(async (card) => {
++          const detailPage = await context.newPage();
++          try {
++            await detailPage.goto(card.link, { waitUntil: 'domcontentloaded', timeout: 120000 });
++            await delay(3000);
++            const data = await scrapeDetailPage(detailPage);
++            if (data && data.name) data.cardName = card.name;
++            return data;
++          } catch (e) {
++            console.log(`[FPT] detail failed for ${card.link}: ${e.message.slice(0, 120)}`);
++            return null;
++          } finally {
++            await detailPage.close();
++          }
++        })
++      );
++      for (const r of results) {
++        if (r.status === 'fulfilled' && r.value?.name) out.push(r.value);
++      }
++      console.log(`[FPT] batch ${Math.min(i + CONCURRENT, cards.length)}/${cards.length} -> collected ${out.length}`);
++    }
++
++    console.log(`[FPT] -> ${out.length} SP`);
++    return out;
++  } finally {
++    await browser.close();
++  }
+ }
+```

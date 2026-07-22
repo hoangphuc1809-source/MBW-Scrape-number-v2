@@ -1,0 +1,28 @@
+import { chromium } from 'playwright';
+
+const browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+const context = await browser.newContext({ userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36', locale: 'vi-VN' });
+const page = await context.newPage();
+await page.goto('https://cellphones.com.vn/laptop-asus-vivobook-14x-m1403qa-ly024w.html', { waitUntil: 'domcontentloaded', timeout: 60000 });
+await page.waitForTimeout(3000);
+
+const data = await page.evaluate(() => {
+  const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+  const txt = (sel) => document.querySelector(sel)?.innerText?.trim()?.slice(0,120) || '';
+  const txts = (sel) => Array.from(document.querySelectorAll(sel)).map(e => clean(e.innerText).slice(0,120));
+  const bodySample = clean(document.body.innerText).slice(0, 400);
+
+  return {
+    bodySample,
+    priceShow: txt('.product__price--show'),
+    priceThrough: txt('.product__price--through'),
+    priceShowAll: txts('.product__price--show'),
+    priceThroughAll: txts('.product__price--through'),
+    candidates: txts('[class*="price"], [class*="sale"], [class*="current"], b, strong').slice(0,40),
+    productTitle: txt('h1'),
+    breadcrumbs: txt('.breadcrumb, .breadcrumbs, nav[aria-label="breadcrumb"]')
+  };
+});
+
+console.log(JSON.stringify(data, null, 2));
+await browser.close();
