@@ -17,11 +17,33 @@ function guessBrand(name, body) {
 
 export async function scrapeCPS() {
   const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] });
+  const browser = await chromium.launch({
+    headless: true,
+    args: [
+      '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+      '--disable-blink-features=AutomationControlled', '--disable-web-security',
+      '--disable-features=IsolateOrigins,site-per-process'
+    ]
+  });
   try {
-    const context = await browser.newContext({ userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', viewport: { width: 1280, height: 900 }, locale: 'vi-VN' });
+    const context = await browser.newContext({
+      userAgent:
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+      viewport: { width: 1280, height: 900 },
+      locale: 'vi-VN',
+      extraHTTPHeaders: {
+        'Accept-Language': 'vi-VN,vi;q=0.9,en;q=0.8',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      },
+      ignoreHTTPSErrors: true
+    });
+    await context.addInitScript(()=>Object.defineProperty(navigator,'webdriver',{get:()=>false}));
+    context.setDefaultTimeout(240000);
+
     const page = await context.newPage();
-    page.setDefaultTimeout(60000);
+    page.setDefaultTimeout(240000);
+    await page.addInitScript(()=>Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3,4,5]}));
+    await page.addInitScript(()=>Object.defineProperty(navigator,'languages',{get:()=>['vi-VN','en-US']}));
     await page.goto(CPS_LISTING, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await delay(4000);
 
