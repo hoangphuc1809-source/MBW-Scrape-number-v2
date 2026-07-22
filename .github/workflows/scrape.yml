@@ -1,91 +1,27 @@
-name: Scrape Laptop Prices
+name: Multi-Dealer Laptop Scraper
 
 on:
-  schedule:
-    # Runs at 01:00, 04:00, 08:00 UTC every day
-    - cron: '0 1,4,8 * * *'
   workflow_dispatch:
-    inputs:
-      dealer:
-        description: 'Dealer to scrape (MBW, CPS, FPT, or leave empty for all)'
-        required: false
-        default: ''
+  schedule:
+    - cron: '0 1 * * *'
 
 jobs:
-  scrape-mbw:
-    name: Scrape MBW
+  scrape-cloud:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    if: ${{ github.event.inputs.dealer == '' || github.event.inputs.dealer == 'MBW' }}
+    timeout-minutes: 90
+
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-          cache: 'npm'
 
-      - name: Install dependencies
-        run: npm ci
+      - run: npm install
+      - run: npx puppeteer browsers install chrome
 
-      - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps
-
-      - name: Scrape MBW
+      - run: npm start
         env:
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          LOG_LEVEL: info
-          PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS: '1'
-        run: node src/cli.js --dealer MBW
-
-  scrape-cps:
-    name: Scrape CellPhones
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    if: ${{ github.event.inputs.dealer == '' || github.event.inputs.dealer == 'CPS' }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps
-
-      - name: Scrape CPS
-        env:
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          LOG_LEVEL: info
-          PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS: '1'
-        run: node src/cli.js --dealer CPS
-
-  scrape-fpt:
-    name: Scrape FPT Shop
-    runs-on: self-hosted
-    timeout-minutes: 45
-    if: ${{ github.event.inputs.dealer == '' || github.event.inputs.dealer == 'FPT' }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps
-
-      - name: Scrape FPT
-        env:
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          LOG_LEVEL: info
-          PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS: '1'
-        run: node src/cli.js --dealer FPT
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          MBW_PROXY_HOST: ${{ secrets.MBW_PROXY_HOST }}
+          SCRAPE_DEALERS: MBW,FPT,CPS

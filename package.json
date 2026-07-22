@@ -1,26 +1,12 @@
 {
-  "name": "mbw-scrape-number-v2",
-  "version": "2.0.0",
-  "description": "Laptop price scraper for MBW, CPS, FPT with Google Sheets integration",
-  "type": "module",
-  "main": "src/cli.js",
+  "name": "multi-dealer-laptop-scraper",
+  "version": "1.0.0",
+  "description": "Scrape laptop prices from MBW, FPT Shop, CellPhones → Google Sheets",
   "scripts": {
-    "scrape": "node src/cli.js",
-    "scrape:mbw": "node src/cli.js --dealer MBW",
-    "scrape:cps": "node src/cli.js --dealer CPS",
-    "scrape:fpt": "node src/cli.js --dealer FPT",
-    "test": "node --test src/**/*.test.js",
-    "lint": "echo 'no lint configured'"
+    "start": "node multi_dealer_scraper.js"
   },
   "dependencies": {
-    "dotenv": "^16.4.5",
-    "googleapis": "^144.0.0",
-    "open": "^11.0.0",
-    "pino": "^9.5.0",
-    "pino-pretty": "^13.0.0",
-    "playwright": "^1.49.0"
-  },
-  "engines": {
-    "node": ">=20.0.0"
+    "puppeteer": "^22.0.0",
+    "googleapis": "^140.0.0"
   }
 }
