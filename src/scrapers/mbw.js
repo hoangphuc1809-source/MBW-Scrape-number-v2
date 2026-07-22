@@ -22,10 +22,6 @@ export async function scrapeMBW() {
       '--disable-features=IsolateOrigins,site-per-process'
     ]
   });
-  await context.addInitScript(()=>Object.defineProperty(navigator,'webdriver',{get:()=>false}));
-  await page.addInitScript(()=>Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3,4,5]}));
-  await page.addInitScript(()=>Object.defineProperty(navigator,'languages',{get:()=>['vi-VN','en-US']}));
-
   const NAV_TIMEOUT = 180000;
   const LISTING_TIMEOUT = 180000;
 
@@ -41,10 +37,13 @@ export async function scrapeMBW() {
       },
       ignoreHTTPSErrors: true
     });
-  context.setDefaultTimeout(240000);
-  page.setDefaultTimeout(240000);
+    await context.addInitScript(()=>Object.defineProperty(navigator,'webdriver',{get:()=>false}));
+
+    context.setDefaultTimeout(240000);
     const page = await context.newPage();
-    page.setDefaultTimeout(180000);
+    page.setDefaultTimeout(240000);
+    await page.addInitScript(()=>Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3,4,5]}));
+    await page.addInitScript(()=>Object.defineProperty(navigator,'languages',{get:()=>['vi-VN','en-US']}));
     await page.goto(TGDD_LISTING, { waitUntil: 'domcontentloaded', timeout: LISTING_TIMEOUT });
     await delay(4000);
 
