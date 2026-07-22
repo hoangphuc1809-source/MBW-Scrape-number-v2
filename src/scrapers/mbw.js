@@ -19,6 +19,9 @@ export async function scrapeMBW() {
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
   });
 
+  const NAV_TIMEOUT = 180000;
+  const LISTING_TIMEOUT = 180000;
+
   try {
     const context = await browser.newContext({
       userAgent:
@@ -27,11 +30,12 @@ export async function scrapeMBW() {
       locale: 'vi-VN'
     });
     const page = await context.newPage();
-    page.setDefaultTimeout(60000);
-    await page.goto(TGDD_LISTING, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    page.setDefaultTimeout(180000);
+    await page.goto(TGDD_LISTING, { waitUntil: 'domcontentloaded', timeout: LISTING_TIMEOUT });
     await delay(4000);
 
     for (let i = 1; i <= 25; i++) {
+      if (i > 1) await delay(1500);
       const candidates = page.locator(
         'a:has-text("Xem thêm"), button:has-text("Xem thêm"), strong:has-text("Xem thêm")'
       );
@@ -47,24 +51,52 @@ export async function scrapeMBW() {
         }
       }
       if (!clicked) break;
-      await delay(2500);
+      await delay(1500);
     }
 
     const links = await page.evaluate(() => {
       const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
       const out = [];
-      document.querySelectorAll('ul.listproduct li.item a.main-contain').forEach((a) => {
-        const href = (a.getAttribute('href') || '').trim();
-        if (!href || href === '#') return;
-        const name = clean(a.getAttribute('data-name') || a.innerText || '');
-        if (!name) return;
-        out.push({
-          name,
-          href: href.startsWith('http') ? href : `https://www.thegioididong.com${href}`
+      try {
+        document.querySelectorAll('ul.listproduct li.item a.main-contain').forEach((a) => {
+          const href = (a.getAttribute('href') || '').trim();
+          if (!href || href === '#') return;
+          const name = clean(a.getAttribute('data-name') || a.innerText || '');
+          if (!name) return;
+          out.push({ name, href: href.startsWith('http') ? href : `https://www.thegioididong.com${href}` });
         });
-      });
+      } catch (e) { console.log('list eval failed', e.message); }
       return out;
     });
+
+    if (!links.length) {
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        await page.goto(TGDD_LISTING, { waitUntil: 'domcontentloaded', timeout: LISTING_TIMEOUT });
+        await delay(3000 + attempt * 2000);
+        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+        await delay(2000);
+        const len = await page.evaluate(() => (document.querySelectorAll('ul.listproduct li.item a.main-contain') || []).length);
+        if (len > 0) {
+          const retry = await page.evaluate(() => {
+            const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+            const out = [];
+            document.querySelectorAll('ul.listproduct li.item a.main-contain').forEach((a) => {
+              const href = (a.getAttribute('href') || '').trim();
+              if (!href || href === '#') return;
+              const name = clean(a.getAttribute('data-name') || a.innerText || '');
+              if (!name) return;
+              out.push({ name, href: href.startsWith('http') ? href : `https://www.thegioididong.com${href}` });
+            });
+            return out;
+          });
+          if (retry.length) {
+            links.length = 0;
+            links.push(...retry);
+            break;
+          }
+        }
+      }
+    }
 
     console.log(`[MBW] Listed links: ${links.length}`);
     const out = [];
@@ -72,7 +104,7 @@ export async function scrapeMBW() {
     for (let i = 0; i < links.length; i++) {
       const { href, name } = links[i];
       try {
-        await page.goto(href, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await page.goto(href, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
         await page.waitForTimeout(1200);
 
         const data = await page.evaluate((nameHint) => {
