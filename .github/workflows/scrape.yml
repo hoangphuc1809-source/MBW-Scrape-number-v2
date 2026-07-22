@@ -15,6 +15,7 @@ jobs:
   scrape-mbw:
     name: Scrape MBW
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     if: ${{ github.event.inputs.dealer == '' || github.event.inputs.dealer == 'MBW' }}
     steps:
       - uses: actions/checkout@v4
@@ -40,6 +41,7 @@ jobs:
   scrape-cps:
     name: Scrape CellPhones
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     if: ${{ github.event.inputs.dealer == '' || github.event.inputs.dealer == 'CPS' }}
     steps:
       - uses: actions/checkout@v4
@@ -64,8 +66,8 @@ jobs:
 
   scrape-fpt:
     name: Scrape FPT Shop
-    # FPT nguồn cần self-hosted runner (chặn IP datacenter)
     runs-on: self-hosted
+    timeout-minutes: 45
     if: ${{ github.event.inputs.dealer == '' || github.event.inputs.dealer == 'FPT' }}
     steps:
       - uses: actions/checkout@v4
