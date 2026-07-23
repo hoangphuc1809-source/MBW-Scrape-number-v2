@@ -1176,7 +1176,12 @@ killTimer.unref(); // Không giữ event loop nếu process kết thúc bình th
   console.log(`📅 ${new Date().toLocaleString('vi-VN')}`);
   console.log(`⏱ Deadline fetch specs: ${DEADLINE_MS/60000} phút`);
 
-  fs.writeFileSync(CREDS_PATH, process.env.GOOGLE_CREDENTIALS);
+  const credsSource = process.env.GOOGLE_CREDENTIALS || CREDS_PATH;
+  if (process.env.GOOGLE_CREDENTIALS) {
+    fs.writeFileSync(CREDS_PATH, process.env.GOOGLE_CREDENTIALS);
+  } else if (!fs.existsSync(CREDS_PATH)) {
+    throw new Error("Missing GOOGLE_CREDENTIALS env and no credentials.json found");
+  }
   const auth = new google.auth.GoogleAuth({
     keyFile: CREDS_PATH,
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
