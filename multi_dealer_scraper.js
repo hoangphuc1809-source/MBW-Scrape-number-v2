@@ -1,5 +1,75 @@
 /**
- * multi_dealer_scraper.js  — v3.4.2
+ * multi_dealer_scraper.js  — v3.4.7
+ *
+ * FIX v3.4.7:
+ *  [BUG16] v3.4.6 (proxy CPS) KHÔNG fix được — 6/6 brand CPS treo, LOẠI HẲN
+ *          giả thuyết "site chặn IP" (proxy đổi IP nguồn mà vẫn treo y hệt).
+ *          Nhìn kỹ log: 1 số brand treo TRƯỚC khi in được "Load thêm: N lần"
+ *          (treo trong vòng lặp bấm nút), 1 số brand in được "Load thêm" nhưng
+ *          KHÔNG BAO GIỜ in "→ N SP" (treo ở bước extract listing). → Chỗ
+ *          treo thật sự là các page.evaluate() dùng để đọc/thao tác DOM tại
+ *          chỗ (bấm nút, scroll, trích xuất listing) — CHƯA TỪNG có timeout
+ *          nào từ trước tới giờ, chỉ có .catch() bắt lỗi reject (không bắt
+ *          được hang vì evaluate treo thì không resolve lẫn reject). Vì CẢ
+ *          6 brand đều treo liên tiếp (không phải 1-2 brand ngẫu nhiên), nghi
+ *          cả CDP session/browser bị đơ toàn bộ từ 1 điểm, không phải lỗi
+ *          riêng của trang/brand nào.
+ *          Fix: (1) helper evalWithTimeout() bọc timeout cho MỌI evaluate()
+ *          trong scrollToBottom + vòng lặp "Load thêm" + extract listing của
+ *          CPS (8-15s/lệnh). (2) Theo dõi số brand thất bại LIÊN TIẾP — nếu
+ *          ≥2 brand liên tiếp trả về 0 SP/timeout, RELAUNCH TOÀN BỘ BROWSER
+ *          (không chỉ tạo page mới) trước khi thử brand kế, vì nghi browser
+ *          instance chứ không chỉ 1 tab bị đơ.
+ *
+ * FIX v3.4.6:
+ *  Route CPS (cellphones.com.vn) qua CÙNG Cloudflare Worker proxy đã dùng cho
+ *  MBW (đa-target, đã xác nhận worker deploy sẵn có route "cps" từ trước —
+ *  không cần đổi gì ở Cloudflare). Test giả thuyết BUG15 (v3.4.5): nghi
+ *  cellphones.com.vn rate-limit/soft-block IP datacenter của GitHub Actions
+ *  runner, khiến 4-5/6 brand CPS treo im lặng ngay lần goto đầu tới trang
+ *  chi tiết SP dù page hoàn toàn sạch (v3.4.4 đã loại được giả thuyết DOM/
+ *  memory tích lũy). Nếu route qua Worker (đổi IP nguồn sang Cloudflare edge)
+ *  giải quyết được hang → xác nhận đúng là site-side block. Nếu vẫn treo →
+ *  loại tiếp giả thuyết này, cần điều tra hướng khác.
+ *
+ * FIX v3.4.5:
+ *  [BUG15] v3.4.4 (page mới mỗi brand) KHÔNG giải quyết được hang — thực tế
+ *          22-23/07 thấy 4-5/6 brand CPS treo liên tiếp NGAY LẦN GOTO ĐẦU
+ *          TIÊN tới trang chi tiết SP dù page hoàn toàn mới, sạch. Loại được
+ *          giả thuyết "tích lũy DOM/memory". Nghi vấn hiện tại: cellphones.com.vn
+ *          rate-limit/soft-block IP runner GitHub Actions (kiểu WAF im lặng
+ *          không phản hồi, giống thegioididong.com/FPT đã gặp) — CẦN TEST
+ *          route CPS qua Cloudflare Worker proxy (đã có sẵn cho MBW) để xác
+ *          nhận. Trong lúc chờ: vấn đề cấp bách hơn là timeout CHỈ có ở CẤP
+ *          BRAND (10 phút) → 1 SP treo làm mất toàn bộ SP của cả brand (kể cả
+ *          listing data đã lấy xong) + tốn nguyên 10 phút mới cứu được.
+ *          Fix: thêm timeout CẤP TỪNG SẢN PHẨM (25s) trong enrichSpecs() —
+ *          treo thì bỏ qua đúng 1 SP đó (không cache), tiếp tục ngay SP kế
+ *          bằng cùng page, không cần đợi brand-level timeout.
+ *
+ * FIX v3.4.4:
+ *  [BUG14] v3.4.3 (Promise.race timeout/brand) chỉ chữa TRIỆU CHỨNG: vẫn dùng
+ *          1 page CPS xuyên suốt cả 4 brand (Asus→Acer→Dell→HP) → DOM/memory
+ *          tích lũy dần qua hàng trăm lần "Load thêm" + điều hướng trang chi
+ *          tiết → tới brand thứ 3-4 trình duyệt bắt đầu treo. Thực tế đã thấy
+ *          Dell VÀ HP treo liên tiếp cùng 1 lần chạy (22/07) → 2×10 phút cộng
+ *          dồn với thời gian Asus/Acer, job vẫn chạm mốc kill-timer 60 phút
+ *          và fail. Fix gốc: mỗi brand CPS luôn dùng 1 page MỚI ngay từ đầu
+ *          (không đợi lỗi/timeout mới tạo lại) — mỗi brand bắt đầu "sạch".
+ *
+ * FIX v3.4.3:
+ *  [BUG13] CPS treo IM LẶNG (không throw, không reject, chỉ đứng im) ở
+ *          brand thứ 3-4 (thường là HP) sau nhiều vòng "Load thêm" liên tiếp
+ *          trên cùng 1 page — log dừng đột ngột ngay sau "→ N SP", không có
+ *          "Fetched specs" nào, job treo tới hết 60 phút kill-timer mới thoát
+ *          (2 lần liên tiếp trong ngày 22/07, luôn đúng lúc vào HP). Vì không
+ *          có exception nào được ném ra, cả fix v3.4.1 (rethrow fatal error)
+ *          và v3.4.2 (unhandledRejection guard) đều không cứu được trường hợp
+ *          này. Fix: bọc mỗi brand CPS trong Promise.race với timeout riêng
+ *          (10 phút/brand, giống pattern FPT_SCRAPE_TIMEOUT_MS đã có cho FPT)
+ *          — treo quá lâu thì bỏ ngang, đóng page cũ, tạo page mới, tiếp tục
+ *          brand sau. Thêm setDefaultTimeout/setDefaultNavigationTimeout cho
+ *          page CPS (trước đây chỉ FPT có).
  *
  * FIX v3.4.2:
  *  [BUG12] Process crash hoàn toàn (exit code 1, mất sạch data lần chạy) do
@@ -119,6 +189,15 @@ const MBW_BASE = PROXY_HOST ? `${PROXY_HOST}/__proxy/mbw` : `https://${MBW_REAL_
 
 const MBW_URL = `${MBW_BASE}/laptop`;
 
+// FIX v3.4.6 [nghi vấn BUG15]: cellphones.com.vn nghi rate-limit/soft-block IP
+// runner GitHub Actions (xem lesson v3.4.5) — route CPS qua CÙNG Cloudflare
+// Worker proxy đã dùng cho MBW (đa-target, chỉ khác proxyKey), đổi IP nguồn
+// giống cách đã giải quyết MBW trước đó. Biến env vẫn tên MBW_PROXY_HOST vì
+// đây là 1 Worker chung cho nhiều dealer, không đổi tên để tránh phải sửa
+// GitHub Secret.
+const CPS_REAL_HOST = 'cellphones.com.vn';
+const CPS_BASE = PROXY_HOST ? `${PROXY_HOST}/__proxy/cps` : `https://${CPS_REAL_HOST}`;
+
 // Helper: gắn request interception lên 1 page để rewrite mọi request tới
 // `realHost` sang `proxyBase + /__proxy/<key>` + path gốc — cho phép các AJAX
 // call tuyệt đối (load-more, API nội bộ...) cũng đi qua proxy.
@@ -167,6 +246,23 @@ const HEADERS = [
 // ── Helpers ───────────────────────────────────────────────
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// FIX v3.4.7 [BUG16]: page.evaluate() dùng để đọc/thao tác DOM (bấm nút
+// "Load thêm", scroll, trích xuất listing) từ trước tới giờ CHỈ có .catch()
+// bắt lỗi REJECT — không bắt được HANG (evaluate treo không bao giờ resolve
+// lẫn reject nếu CDP session bị đơ). Thực tế 22-23/07 đã thấy TẤT CẢ brand
+// CPS treo ngay trong bước "Load thêm"/extract listing (không phải goto tới
+// trang chi tiết như nghi ban đầu) — kể cả sau khi đã route qua Cloudflare
+// proxy (loại được giả thuyết site chặn IP). Vì cả 6/6 brand treo liên tiếp,
+// nghi CDP session hoặc cả browser bị đơ toàn bộ từ 1 điểm nào đó, không chỉ
+// riêng 1 trang. Helper này bọc timeout cho MỌI page.evaluate() ở bước
+// listing-scrape, tương tự cách đã làm cho fetch specs (v3.4.5).
+function evalWithTimeout(promise, ms, fallback) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]).catch(() => fallback);
+}
+
 function formatDate(d) {
   return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
 }
@@ -179,15 +275,15 @@ async function scrollToBottom(page) {
   // Fix: scroll nhiều bước nhỏ từ Node.js thay vì 1 evaluate async block lớn
   let lastHeight = 0;
   for (let i = 0; i < 40; i++) {
-    const height = await page.evaluate(() => document.body.scrollHeight).catch(() => 0);
+    const height = await evalWithTimeout(page.evaluate(() => document.body.scrollHeight), 8000, 0);
     if (height === lastHeight && i > 0) break;
     lastHeight = height;
     const steps = Math.ceil(height / 1500);
     for (let s = 0; s <= steps; s++) {
-      await page.evaluate((y) => window.scrollTo(0, y), s * 1500).catch(() => {});
+      await evalWithTimeout(page.evaluate((y) => window.scrollTo(0, y), s * 1500), 8000, null);
     }
     await sleep(400);
-    const newHeight = await page.evaluate(() => document.body.scrollHeight).catch(() => 0);
+    const newHeight = await evalWithTimeout(page.evaluate(() => document.body.scrollHeight), 8000, 0);
     if (newHeight === height) break;
   }
 }
@@ -293,7 +389,8 @@ function mapSpecsFPT(raw) {
 // ── CPS: fetch specs từ detail page ──────────────────────
 async function fetchSpecsCPS(page, url) {
   try {
-    const ok = await safeGoto(page, url);
+    const proxiedUrl = PROXY_HOST ? url.replace(`https://${CPS_REAL_HOST}`, CPS_BASE) : url;
+    const ok = await safeGoto(page, proxiedUrl);
     if (!ok) return {};
     await sleep(1200);
     // Detect stock status từ CPS detail page
@@ -348,7 +445,18 @@ function mapSpecsCPS(raw) {
 // ── enrichSpecs: fetch specs cho SP chưa có, dừng khi hết deadline ──
 async function enrichSpecs(products, specCache, fetchFn, page, startTime, deadlineMs) {
   const effectiveDeadline = deadlineMs || DEADLINE_MS;
+  // FIX v3.4.5 [BUG15]: v3.4.3/v3.4.4 chỉ có timeout ở CẤP BRAND (10 phút) —
+  // khi 1 SP treo câm (không lỗi, không phản hồi — nghi do site rate-limit/
+  // chặn IP runner, KHÔNG phải do browser/DOM vì đã test page hoàn toàn mới
+  // vẫn treo), phải đợi hết 10 phút mới "cứu" được VÀ MẤT LUÔN TOÀN BỘ SP
+  // của brand đó (kể cả data listing cơ bản đã lấy xong). Thực tế 22-23/07 đã
+  // thấy 4-5/6 brand CPS treo liên tiếp → gần cạn hết 60 phút kill-timer.
+  // Fix: timeout riêng ở CẤP TỪNG SẢN PHẨM (25s) — treo thì bỏ qua đúng 1 SP
+  // đó (không cache để mai thử lại), tiếp tục ngay SP kế tiếp bằng CÙNG page,
+  // không đợi tới brand-level timeout mới xử lý.
+  const PER_PRODUCT_TIMEOUT_MS = 25000;
   let fetched = 0;
+  let skipped = 0;
   for (const p of products) {
     if (specCache.has(p.link)) {
       // Copy specs từ cache NHƯNG KHÔNG override stockStatus:
@@ -362,7 +470,17 @@ async function enrichSpecs(products, specCache, fetchFn, page, startTime, deadli
         console.log(`    ⏱ Deadline reached (${Math.round(effectiveDeadline/60000)}m) — dừng fetch specs`);
         break;
       }
-      const specs = await fetchFn(page, p.link);
+      const productTimeout = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('per-product timeout')), PER_PRODUCT_TIMEOUT_MS)
+      );
+      let specs;
+      try {
+        specs = await Promise.race([fetchFn(page, p.link), productTimeout]);
+      } catch (e) {
+        skipped++;
+        await sleep(600);
+        continue; // bỏ qua đúng 1 SP này, KHÔNG cache, KHÔNG mất cả brand
+      }
       // Khi fetch detail page: stockStatus từ detail page chính xác hơn listing
       // → dùng stockStatus từ detail page (override listing status)
       Object.assign(p, specs);
@@ -375,6 +493,7 @@ async function enrichSpecs(products, specCache, fetchFn, page, startTime, deadli
     }
   }
   if (fetched > 0) console.log(`    → Fetched specs: ${fetched} SP mới`);
+  if (skipped > 0) console.log(`    ⏭ Bỏ qua ${skipped} SP (treo/timeout ${PER_PRODUCT_TIMEOUT_MS/1000}s mỗi SP, sẽ thử lại lần sau)`);
 }
 
 // ── FIX #2: SKU rớt khỏi listing hôm nay (mọi dealer) — thay vì im lặng ────
@@ -439,10 +558,16 @@ async function checkMissingProducts(browser, dealerName, candidates, specCache) 
   await page.setViewport({ width: 1280, height: 900 });
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36');
   const isMBW = dealerName === 'MBW';
+  const isCPS = dealerName === 'CellPhone S';
   if (isMBW) await enableProxyInterception(page, MBW_REAL_HOST, 'mbw');
+  if (isCPS) await enableProxyInterception(page, CPS_REAL_HOST, 'cps');
 
   for (const c of toCheck) {
-    const url = isMBW && PROXY_HOST ? c.link.replace(`https://${MBW_REAL_HOST}`, MBW_BASE) : c.link;
+    let url = c.link;
+    if (PROXY_HOST) {
+      if (isMBW) url = c.link.replace(`https://${MBW_REAL_HOST}`, MBW_BASE);
+      if (isCPS) url = c.link.replace(`https://${CPS_REAL_HOST}`, CPS_BASE);
+    }
     let status = 'Trang không tải đủ nội dung - cần kiểm tra thủ công';
     try {
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
@@ -784,20 +909,24 @@ async function scrapeFPT(page, brand, specCache, startTime) {
 // ── SCRAPER 3 — CellPhone S ───────────────────────────────
 async function scrapeCPS(page, brand, specCache, startTime) {
   console.log(`  [CPS] ${brand.name}`);
-  // CPS không bị chặn IP datacenter → gọi trực tiếp, không cần proxy.
+  // FIX v3.4.6: route qua Cloudflare Worker proxy (xem comment CPS_BASE ở đầu
+  // file) để test giả thuyết cellphones.com.vn rate-limit/soft-block IP runner.
+  await enableProxyInterception(page, CPS_REAL_HOST, 'cps');
+  const listingUrl = PROXY_HOST ? brand.cpsUrl.replace(`https://${CPS_REAL_HOST}`, CPS_BASE) : brand.cpsUrl;
   try {
-    await page.goto(brand.cpsUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(listingUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
   } catch(e) {
     console.log(`    ⚠ Load failed: ${e.message.substring(0,60)}`);
     return [];
   }
+  if (PROXY_HOST) await sleep(3000); // qua proxy cần thêm thời gian render, giống MBW
   await sleep(2000);
 
   let clicks = 0;
   while (true) {
     await scrollToBottom(page);
     await sleep(1800);
-    const clicked = await page.evaluate(() => {
+    const clicked = await evalWithTimeout(page.evaluate(() => {
       const sels = ['.btn-show-more','button.btn-show-more','.loadmore-btn',
                     'button[class*="loadmore"]','a[class*="loadmore"]','.load-more-button'];
       for (const sel of sels) {
@@ -805,14 +934,14 @@ async function scrapeCPS(page, brand, specCache, startTime) {
         if (el && el.offsetParent !== null) { el.click(); return true; }
       }
       return false;
-    }).catch(() => false);
+    }), 12000, false);
     if (!clicked) break;
     clicks++;
     await sleep(2500);
   }
   if (clicks) console.log(`    → Load thêm: ${clicks} lần`);
 
-  const products = await page.evaluate((brandName, BASE) => {
+  const products = await evalWithTimeout(page.evaluate((brandName, BASE) => {
     const out  = [];
     const seen = new Set();
     document.querySelectorAll('.product-item').forEach(card => {
@@ -839,7 +968,12 @@ async function scrapeCPS(page, brand, specCache, startTime) {
       });
     });
     return out;
-  }, brand.name, 'https://cellphones.com.vn');
+  }, brand.name, 'https://cellphones.com.vn'), 15000, []);
+
+  if (products.length === 0) {
+    console.log(`    ⚠ Extract listing timeout/lỗi (0 SP) — CDP session có thể đã đơ, bỏ ngang brand này`);
+    return [];
+  }
 
   console.log(`    → ${products.length} SP`);
   await enrichSpecs(products, specCache, fetchSpecsCPS, page, startTime);
@@ -1038,7 +1172,7 @@ killTimer.unref(); // Không giữ event loop nếu process kết thúc bình th
 
 (async () => {
   const startTime = Date.now();
-  console.log('🚀 Multi-Dealer Scraper v3.4.2');
+  console.log('🚀 Multi-Dealer Scraper v3.4.7');
   console.log(`📅 ${new Date().toLocaleString('vi-VN')}`);
   console.log(`⏱ Deadline fetch specs: ${DEADLINE_MS/60000} phút`);
 
@@ -1050,12 +1184,21 @@ killTimer.unref(); // Không giữ event loop nếu process kết thúc bình th
   const sheets = google.sheets({ version: 'v4', auth });
   const specCache = await loadSpecCacheFromSheet(sheets);
 
-  const browser = await puppeteer.launch({
+  const PUPPETEER_LAUNCH_OPTS = {
     headless: true,
     protocolTimeout: 300000, // 300s — ubuntu-latest đôi khi CDP chậm bất thường (đã gặp Network.setCacheDisabled timeout ở 180s)
     args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
            '--disable-gpu','--window-size=1280,900'],
-  });
+  };
+  let browser = await puppeteer.launch(PUPPETEER_LAUNCH_OPTS);
+  // FIX v3.4.7 [BUG16]: khi CDP/browser bị đơ toàn bộ (không chỉ 1 tab — thấy
+  // rõ khi 6/6 brand CPS liên tiếp treo ngay ở page.evaluate(), kể cả page
+  // hoàn toàn mới), tạo page mới KHÔNG đủ — phải khởi động lại CẢ browser.
+  async function relaunchBrowser(oldBrowser) {
+    console.log('    🔄 Relaunch cả browser (nghi CDP session bị đơ toàn bộ)...');
+    try { await oldBrowser.close(); } catch(_) {}
+    return await puppeteer.launch(PUPPETEER_LAUNCH_OPTS);
+  }
 
   const allProducts = [];
 
@@ -1132,25 +1275,57 @@ killTimer.unref(); // Không giữ event loop nếu process kết thúc bình th
     // ── CPS ──
     if (SCRAPE_DEALERS.has('CPS')) {
       console.log('\n═══ CellPhone S ═══');
-      let pageCPS = await browser.newPage();
-      await pageCPS.setViewport({ width: 1280, height: 900 });
-      await pageCPS.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36');
       const todayLinksCPS = new Set();
+      // FIX v3.4.3 [BUG13]: CPS hay treo IM LẶNG (không throw, không timeout) —
+      // log dừng đột ngột sau "→ N SP", không có "Fetched specs" nào, job treo
+      // tới hết kill-timer 60 phút. Fix ban đầu: Promise.race timeout 10 phút/brand.
+      // FIX v3.4.4 [BUG14]: v3.4.3 chỉ chữa TRIỆU CHỨNG — vẫn dùng 1 page CPS
+      // xuyên suốt cả 4 brand (Asus→Acer→Dell→HP), nên DOM/memory tích lũy dần
+      // qua hàng trăm lần "Load thêm" + điều hướng trang chi tiết → tới brand
+      // thứ 3-4 trình duyệt bắt đầu treo. Thực tế đã thấy Dell VÀ HP treo liên
+      // tiếp cùng 1 lần chạy → 2×10 phút cộng dồn với thời gian Asus/Acer suýt
+      // chạm luôn mốc kill-timer 60 phút, job vẫn fail. Fix gốc: mỗi brand luôn
+      // dùng 1 page MỚI từ đầu (không đợi lỗi mới tạo lại) — mỗi brand bắt đầu
+      // "sạch", giảm hẳn khả năng tích lũy dẫn đến treo.
+      const CPS_BRAND_TIMEOUT_MS = 10 * 60 * 1000; // 10 phút/brand
+      let consecutiveFails = 0;
       for (const brand of BRANDS) {
+        const pageCPS = await browser.newPage();
+        await pageCPS.setViewport({ width: 1280, height: 900 });
+        await pageCPS.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36');
+        pageCPS.setDefaultTimeout(20000);
+        pageCPS.setDefaultNavigationTimeout(30000);
+        let brandFailed = false;
         try {
-          const products = await scrapeCPS(pageCPS, brand, specCache, startTime);
+          const cpsBrandTimeout = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(`CPS ${brand.name} timeout sau ${CPS_BRAND_TIMEOUT_MS/60000} phút — page có thể đã treo`)), CPS_BRAND_TIMEOUT_MS)
+          );
+          const products = await Promise.race([
+            scrapeCPS(pageCPS, brand, specCache, startTime),
+            cpsBrandTimeout,
+          ]);
           allProducts.push(...products);
           products.forEach(p => todayLinksCPS.add(p.link));
+          brandFailed = products.length === 0;
         } catch (e) {
           console.log(`    💥 ${brand.name} lỗi: ${e.message.substring(0,100)}`);
+          brandFailed = true;
+        } finally {
           try { await pageCPS.close(); } catch(_) {}
-          pageCPS = await browser.newPage();
-          await pageCPS.setViewport({ width: 1280, height: 900 });
-          await pageCPS.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36');
+        }
+        if (brandFailed) {
+          consecutiveFails++;
+          // 2 brand liên tiếp treo/0 SP → nghi cả browser bị đơ, không chỉ 1 page.
+          // Relaunch browser trước khi thử brand kế tiếp.
+          if (consecutiveFails >= 2) {
+            browser = await relaunchBrowser(browser);
+            consecutiveFails = 0;
+          }
+        } else {
+          consecutiveFails = 0;
         }
         await sleep(800);
       }
-      await pageCPS.close();
 
       // FIX #2: SP CPS nào hôm qua có mà hôm nay không thấy trong listing
       const missingCandidatesCPS = await getMissingCandidates(sheets, 'CellPhone S', todayLinksCPS);
